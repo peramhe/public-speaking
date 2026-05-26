@@ -1,0 +1,566 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "wpninjasfi-intune-maa-notifications-demo",
+      "metadata": {
+        "description": "Name of the resource group where the Logic Apps are deployed."
+      }
+    },
+    "office365ConnectionName": {
+      "type": "string",
+      "defaultValue": "office365",
+      "metadata": {
+        "description": "Name of the Microsoft.Web/connections resource for Office 365 Outlook."
+      }
+    },
+    "office365ConnectionDisplayName": {
+      "type": "string",
+      "defaultValue": "office365",
+      "metadata": {
+        "description": "Display name shown for the Office 365 Outlook API connection."
+      }
+    },
+    "adminEmail": {
+      "type": "string",
+      "metadata": {
+        "description": "Email address that receives Intune Multi Admin Approval notifications."
+      }
+    }
+  },
+  "variables": {
+    "notificationLogicAppName": "logic-wpninjasfi-intune-maa-notifications-demo",
+    "agentLogicAppName": "logic-wpninjasfi-intune-maa-agent-demo",
+    "helloWorldLogicAppName": "logic-wpninjasfi-hello-world-demo"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[deployment().location]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "deploy-logicapps-and-connection",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ],
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "office365ConnectionName": {
+              "type": "string"
+            },
+            "office365ConnectionDisplayName": {
+              "type": "string"
+            },
+            "adminEmail": {
+              "type": "string"
+            },
+            "notificationLogicAppName": {
+              "type": "string"
+            },
+            "agentLogicAppName": {
+              "type": "string"
+            },
+            "helloWorldLogicAppName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[parameters('office365ConnectionName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "displayName": "[parameters('office365ConnectionDisplayName')]",
+                "api": {
+                  "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'office365')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2019-05-01",
+              "name": "[parameters('notificationLogicAppName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]"
+              ],
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "metadata": {
+                    "author": "henri.peramaki@elisa.fi"
+                  },
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "triggers": {
+                    "Recurrence": {
+                      "recurrence": {
+                        "interval": 3,
+                        "frequency": "Hour",
+                        "startTime": "2030-06-01T00:00:00Z"
+                      },
+                      "evaluatedRecurrence": {
+                        "interval": 3,
+                        "frequency": "Hour",
+                        "startTime": "2030-06-01T00:00:00Z"
+                      },
+                      "type": "Recurrence"
+                    }
+                  },
+                  "actions": {
+                    "Catch": {
+                      "actions": {
+                        "Send_error_message": {
+                          "runAfter": {
+                            "Filter_errors": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['office365']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "body": {
+                              "To": "[parameters('adminEmail')]",
+                              "Subject": "Fetching pending Intune Multi Admin Approval requests failed",
+                              "Body": "<p class=\"editor-paragraph\">Hello,</p><br><p class=\"editor-paragraph\">Fetching pending Intune Multi Admin Approval requests failed with errors:<br><br>@{body('Filter_errors')}</p><br><p class=\"editor-paragraph\">Best regards,</p><p class=\"editor-paragraph\">Logic App Automation</p>",
+                              "Importance": "Normal"
+                            },
+                            "path": "/v2/Mail"
+                          }
+                        },
+                        "Filter_errors": {
+                          "type": "Query",
+                          "inputs": {
+                            "from": "@result('Try')",
+                            "where": "@equals(item()?.Status, 'Failed')"
+                          }
+                        },
+                        "Terminate": {
+                          "runAfter": {
+                            "Send_error_message": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Terminate",
+                          "inputs": {
+                            "runStatus": "Failed"
+                          }
+                        }
+                      },
+                      "runAfter": {
+                        "Try": [
+                          "Failed"
+                        ]
+                      },
+                      "type": "Scope"
+                    },
+                    "Try": {
+                      "actions": {
+                        "Get_operationApprovalRequests": {
+                          "type": "Http",
+                          "inputs": {
+                            "uri": "https://graph.microsoft.com/beta/deviceManagement/operationApprovalRequests",
+                            "method": "GET",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "audience": "https://graph.microsoft.com"
+                            }
+                          },
+                          "runtimeConfiguration": {
+                            "contentTransfer": {
+                              "transferMode": "Chunked"
+                            }
+                          }
+                        },
+                        "Filter_items_with_status_=_needsApproval": {
+                          "runAfter": {
+                            "Get_operationApprovalRequests": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Query",
+                          "inputs": {
+                            "from": "@body('Get_operationApprovalRequests').value",
+                            "where": "@equals(item().status, 'needsApproval')"
+                          }
+                        },
+                        "If_one_or_more_requests_need_approval": {
+                          "actions": {
+                            "Send_notification_email": {
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['office365']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "body": {
+                                  "To": "[parameters('adminEmail')]",
+                                  "Subject": "Pending Intune Multi Admin approval requests",
+                                  "Body": "<p class=\"editor-paragraph\">Hello,</p><br><p class=\"editor-paragraph\">You have @{length(body('Filter_items_with_status_=_needsApproval'))} pending Multi Admin Approval requests in Intune.</p><br><p class=\"editor-paragraph\">Go here to review them:<br><a href=\"https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/multiAdminApproval\" class=\"editor-link\">https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/multiAdminApproval</a></p><br><p class=\"editor-paragraph\">Best regards,</p><p class=\"editor-paragraph\">Automation</p>",
+                                  "Importance": "Normal"
+                                },
+                                "path": "/v2/Mail"
+                              }
+                            }
+                          },
+                          "runAfter": {
+                            "Filter_items_with_status_=_needsApproval": [
+                              "Succeeded"
+                            ]
+                          },
+                          "else": {
+                            "actions": {}
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "greater": [
+                                  "@length(body('Filter_items_with_status_=_needsApproval'))",
+                                  0
+                                ]
+                              }
+                            ]
+                          },
+                          "type": "If"
+                        }
+                      },
+                      "runAfter": {},
+                      "type": "Scope"
+                    }
+                  },
+                  "outputs": {},
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object",
+                      "defaultValue": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "office365": {
+                        "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'office365')]",
+                        "connectionId": "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]",
+                        "connectionName": "[parameters('office365ConnectionName')]",
+                        "connectionProperties": {}
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2019-05-01",
+              "name": "[parameters('agentLogicAppName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]"
+              ],
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "metadata": {
+                    "agentType": "autonomous",
+                    "author": "henri.peramaki@elisa.fi"
+                  },
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "triggers": {
+                    "Recurrence": {
+                      "recurrence": {
+                        "interval": 3,
+                        "frequency": "Hour",
+                        "startTime": "2030-06-01T00:00:00Z"
+                      },
+                      "evaluatedRecurrence": {
+                        "interval": 3,
+                        "frequency": "Hour",
+                        "startTime": "2030-06-01T00:00:00Z"
+                      },
+                      "type": "Recurrence"
+                    }
+                  },
+                  "actions": {
+                    "Agent_bd95": {
+                      "runAfter": {},
+                      "limit": {
+                        "count": 5
+                      },
+                      "tools": {
+                        "Get_pending_Intune_Multi_Admin_Approval_requests": {
+                          "description": "This tool gets Intune Multi Admin Approval requests that are currently pending",
+                          "actions": {
+                            "HTTP_GET_operationApprovalRequests": {
+                              "type": "Http",
+                              "inputs": {
+                                "uri": "https://graph.microsoft.com/beta/deviceManagement/operationApprovalRequests",
+                                "method": "GET",
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "audience": "https://graph.microsoft.com"
+                                }
+                              },
+                              "runtimeConfiguration": {
+                                "contentTransfer": {
+                                  "transferMode": "Chunked"
+                                }
+                              }
+                            },
+                            "Filter_array": {
+                              "runAfter": {
+                                "HTTP_GET_operationApprovalRequests": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Query",
+                              "inputs": {
+                                "from": "@body('HTTP_GET_operationApprovalRequests').value",
+                                "where": "@equals(item().status, 'needsApproval')"
+                              }
+                            }
+                          }
+                        },
+                        "Send_email_on_errors": {
+                          "description": "When an error occurs on getting intune multi admin approval requests, this tool is used to send a message containing the error message",
+                          "agentParameterSchema": {
+                            "type": "object",
+                            "properties": {
+                              "ErrorMessageBody": {
+                                "type": "string",
+                                "description": "A HTML message that will be sent to admin when an error occurs. Should include error message and advice on how to solve the situtation."
+                              }
+                            },
+                            "required": [
+                              "ErrorMessageBody"
+                            ]
+                          },
+                          "actions": {
+                            "Send_error_email": {
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['office365']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "body": {
+                                  "To": "[parameters('adminEmail')]",
+                                  "Subject": "An error occured",
+                                  "Body": "<p class=\"editor-paragraph\">@{agentParameters('ErrorMessageBody')}</p>",
+                                  "Importance": "Normal"
+                                },
+                                "path": "/v2/Mail"
+                              }
+                            }
+                          }
+                        },
+                        "Send_summary_email_to_admin": {
+                          "description": "This tool is used when sending the summary email to admin",
+                          "agentParameterSchema": {
+                            "type": "object",
+                            "properties": {
+                              "SummarizationOfApprovals": {
+                                "type": "string",
+                                "description": "Summarization of pending Intune Multi Admin Approval requests. This will be embedded to a HTML message so instead of linebreaks use <p></p> and create lists with <ul></ul>. Recommended action should be given for a pending request as a separate bolded paragraph after each summarized pending request."
+                              },
+                              "NumberOfPendingApprovalRequests": {
+                                "type": "integer",
+                                "description": "The number of Intune Multi Admin Approval requests that are pending (pendingApproval)"
+                              }
+                            },
+                            "required": [
+                              "SummarizationOfApprovals",
+                              "NumberOfPendingApprovalRequests"
+                            ]
+                          },
+                          "actions": {
+                            "Send_summary_email": {
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['office365']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "body": {
+                                  "To": "[parameters('adminEmail')]",
+                                  "Subject": "Pending Intune Multi Admin Approval requests",
+                                  "Body": "<p class=\"editor-paragraph\">Hello,<br><br>You have @{agentParameters('NumberOfPendingApprovalRequests')} pending Multi Admin Approval requests in Intune.</p><br><p class=\"editor-paragraph\">Summary:<br>@{agentParameters('SummarizationOfApprovals')}</p><p class=\"editor-paragraph\"><br>Go here to review them:<br>https://intune.microsoft.com/#view/Microsoft_Intune_DeviceSettings/TenantAdminMenu/~/multiAdminApproval<br><br>Best regards,<br>Your AI Agent</p>",
+                                  "Importance": "Normal"
+                                },
+                                "path": "/v2/Mail"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "type": "Agent",
+                      "inputs": {
+                        "parameters": {
+                          "messages": [
+                            {
+                              "role": "system",
+                              "content": "You are agentic Intune Expert that is specialized to interpreting Intune Multi Admin Approval request JSONs in English. You task is to:\n- Get pending Intune Multi Admin Approval requests. If there are no pending request, stop here and do not send any emails.\n- Interpret each of the request and give a proposal whether the request is ok to approve or if it needs to be reviewed in more detail with the requestor\n- Send summarization email to admin that contains a summarization of each pending request\n- End of task\n\n"
+                            }
+                          ],
+                          "agentModelType": "AzureOpenAI",
+                          "agentModelSettings": {
+                            "agentHistoryReductionSettings": {
+                              "agentHistoryReductionType": "maximumTokenCountReduction",
+                              "maximumTokenCount": 1000
+                            }
+                          }
+                        }
+                      },
+                      "operationOptions": "FailWhenLimitsReached"
+                    }
+                  },
+                  "outputs": {},
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object",
+                      "defaultValue": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "office365": {
+                        "id": "[subscriptionResourceId('Microsoft.Web/locations/managedApis', parameters('location'), 'office365')]",
+                        "connectionId": "[resourceId('Microsoft.Web/connections', parameters('office365ConnectionName'))]",
+                        "connectionName": "[parameters('office365ConnectionName')]",
+                        "connectionProperties": {}
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2019-05-01",
+              "name": "[parameters('helloWorldLogicAppName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "triggers": {
+                    "When_an_HTTP_request_is_received": {
+                      "type": "Request",
+                      "kind": "Http"
+                    }
+                  },
+                  "actions": {
+                    "Response": {
+                      "runAfter": {},
+                      "type": "Response",
+                      "kind": "Http",
+                      "inputs": {
+                        "statusCode": 200,
+                        "body": {
+                          "Message": "Hello World!"
+                        }
+                      }
+                    }
+                  },
+                  "outputs": {},
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object",
+                      "defaultValue": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "type": "Object",
+                    "value": {}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "location": {
+            "value": "[deployment().location]"
+          },
+          "office365ConnectionName": {
+            "value": "[parameters('office365ConnectionName')]"
+          },
+          "office365ConnectionDisplayName": {
+            "value": "[parameters('office365ConnectionDisplayName')]"
+          },
+          "adminEmail": {
+            "value": "[parameters('adminEmail')]"
+          },
+          "notificationLogicAppName": {
+            "value": "[variables('notificationLogicAppName')]"
+          },
+          "agentLogicAppName": {
+            "value": "[variables('agentLogicAppName')]"
+          },
+          "helloWorldLogicAppName": {
+            "value": "[variables('helloWorldLogicAppName')]"
+          }
+        }
+      },
+      "resourceGroup": "[parameters('resourceGroupName')]"
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "notificationLogicAppName": {
+      "type": "string",
+      "value": "[variables('notificationLogicAppName')]"
+    },
+    "agentLogicAppName": {
+      "type": "string",
+      "value": "[variables('agentLogicAppName')]"
+    },
+    "helloWorldLogicAppName": {
+      "type": "string",
+      "value": "[variables('helloWorldLogicAppName')]"
+    }
+  }
+}

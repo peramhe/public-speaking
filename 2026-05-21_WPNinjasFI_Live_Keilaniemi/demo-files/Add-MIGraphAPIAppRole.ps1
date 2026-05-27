@@ -4,6 +4,10 @@ This script adds the permissions required for this demo to work.
 You need to run this script for each of the two Logic Apps deployed with the ARM template, 
 using the Object (principal) ID of each Logic App's managed identity as the `IdentityPrincipalId` parameter value.
 
+Requires the Azure CLI to be installed and logged in with an account that has permissions to manage app role assignments.
+
+Most convenient way to run this script is from the Azure Cloud Shell, which has the Azure CLI pre-installed and logged in.
+
 Author: Henri Perämäki (henri.peramaki@elisa.fi)
 
 #>
